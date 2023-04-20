@@ -1,0 +1,283 @@
+---
+title: "Untitled"
+author: "MF-Faqih"
+date: "2023-03-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(mice)
+library(GGally)
+library(caret)
+library(class)
+```
+
+```{r cars}
+titanic_train <- read.csv("train.csv")
+
+head(titanic_train)
+```
+
+```{r}
+titanic_test <- read.csv("test.csv")
+
+head(titanic_test)
+```
+
+Column description:
+- Pclass: Ticket CLass (1 for Upper, 2 for Middle and 3 for Lower)
+- Sex: Passenger's Gender
+- Age: Passenger's Age
+- SibSp: siblings / spouse aboard the Titanic (0 for Siblings and 1 for Spouse)
+- Parch: parents / children abord the Titanic (0 for Parent)
+- Ticket: Ticket Number
+- Fare: Passenger Fare (amount of money should to be paid)
+- Cabin: Cabin Number
+- Embarked: Port of Embarkation
+
+
+# Data test's exploration and preparation
+```{r}
+# Change inappropriate data type into correct one
+# Drop unused column
+titanic_train <- titanic_train %>% 
+  select(-c(PassengerId, Ticket, Name, Cabin)) %>% 
+  mutate(Embarked = as.factor(Embarked),
+         Pclass = as.factor(Pclass),
+         Sex = as.factor(Sex),
+         Survived = as.factor(Survived))
+```
+
+
+Since there's missing value in age column that has more than 5% of the total data, we will use mice imputation to fill the missing value.
+
+```{r}
+# filling missing value in fare column with its median, since the data has skew
+med_fare <- median(titanic_train$Fare, na.rm = T)
+```
+
+```{r}
+titanic_train$Fare[is.na(titanic_train$Fare)] <- med_fare
+```
+
+```{r}
+colSums(is.na(titanic_train))
+```
+
+# Using mcie imputatio methode to fill missing value in age column
+```{r}
+age_imputed <- mice(titanic_train, method = "pmm", seed = 100)
+```
+
+```{r}
+titanic_train_clean <- complete(age_imputed)
+```
+
+```{r}
+head(titanic_train_clean)
+```
+
+```{r}
+colSums(is.na(titanic_train_clean))
+```
+
+# All column already has no missing value, we can continue to make a classification model
+```{r}
+#Explore data distribution
+
+summary(titanic_train_clean)
+```
+
+#Checking for target of data train balances
+```{r}
+titanic_train_clean$Survived %>% table() %>% prop.table()
+```
+
+#Applying upsampling to balancing the target variable
+```{r}
+titanic_train_clean_up <- upSample(x = titanic_train_clean %>% select(-Survived), y = titanic_train_clean$Survived , yname = "Survived")
+```
+
+```{r}
+(titanic_train_clean_up$Survived) %>% table() %>% prop.table()
+```
+
+
+# BUILD CLASSIFICATION MODEL
+1. Using all column as predictor
+```{r}
+model_all <- glm(Survived ~ ., data = titanic_train_clean_up, family = binomial)
+```
+
+```{r}
+summary(model_all)
+```
+
+2. Using all categorical columns as predictor
+```{r}
+model_cat <- glm(Survived ~ Pclass + Sex + Embarked, data = titanic_train_clean_up, family = binomial)
+```
+
+```{r}
+summary(model_cat)
+```
+
+3. Using all numerical columns as predictor
+```{r}
+model_num <- glm(Survived ~ Age + SibSp + Parch + Fare, data = titanic_train_clean_up, family = binomial)
+```
+
+```{r}
+summary(model_num)
+```
+
+4. using stepwise elemination
+```{r}
+model_step <- step(model_all, direction = "backward", trace = F)
+```
+
+```{r}
+summary(model_step)
+```
+
+First model has least number of residual deviance and AIC, so, we'll chose the model to make prediction
+
+# Since there's some missing values in data test as well, we'll try to use mice model in data train to replace missing value in data test
+```{r}
+summary(titanic_test)
+```
+
+```{r}
+colSums(is.na(titanic_test))
+```
+
+```{r}
+#Fare column has missing value less than 5%, so we'll drop the row
+
+titanic_test <- titanic_test %>% 
+  filter(Fare != "153")
+```
+
+```{r}
+colSums(is.na(titanic_test))
+```
+
+```{r}
+titanic_test_full <- complete(age_imputed, newdata = titanic_test)
+```
+
+```{r}
+colSums(is.na(titanic_test_full))
+```
+
+All columns already has no missing value, next, we'll using predict function to make prediction
+```{r}
+titanic_test_full$pred_Risk <- predict(object=model_all,
+                                       newdata = titanic_test_full,
+                                       type="response")
+  
+head(titanic_test_full, 10)
+```
+
+```{r}
+titanic_test_full$pred_Label <- ifelse(titanic_test_full$pred_Risk>0.5,1,0)
+
+head(titanic_test_full)
+```
+
+```{r}
+#data test confusion matrix
+
+confusionMatrix(data = as.factor(titanic_test_full$pred_Label),
+                reference = titanic_test_full$Survived,
+                positive="1")
+```
+
+```{r}
+titanic_train_clean_up$pred_Risk <- predict(object=model_all,
+                                       newdata = titanic_train_clean_up,
+                                       type="response")
+```
+
+```{r}
+titanic_train_clean_up$pred_Label <- ifelse(titanic_train_clean_up$pred_Risk>0.5,1,0)
+```
+
+
+```{r}
+#data test confusion matrix
+
+confusionMatrix(data = as.factor(titanic_train_clean_up$pred_Label),
+                reference = titanic_train_clean_up$Survived,
+                positive="1")
+```
+
+
+Summary:
+From our model above using regression model where all column used as predictor, we get:
+Accuracy data test: 79%
+Sensitivity/Recall data test: 75%
+Sensitivity/Recall data train: 75%
+Precision/Pos Pred Value: 80%
+
+The model has good fit since both sensitivity for train and test data has same value
+
+Note: For better model, we should try to higher Precision value, since we (Lower FP point)
+
+
+#BUILD MODEL USING K-NN ML
+```{r}
+#Using all numeric column as train predictor
+titanic_train_x <- titanic_train_clean_up %>% 
+  select(c(Age, SibSp, Parch, Fare))
+```
+
+```{r}
+#Using all numeric column as test predictor
+titanic_test_x <- titanic_test_full %>% 
+  select(c(Age, SibSp, Parch, Fare))
+```
+
+```{r}
+# Determine target train & test variable
+titanic_train_y <- titanic_train_clean_up[, 8]
+titanic_test_y <- titanic_test_full[, 1]
+```
+
+#Scaling predictor
+```{r}
+titanic_train_xs <- scale(titanic_train_x)
+
+titanic_test_xs <- scale(titanic_test_x,
+                         center = attr(titanic_train_xs,"scaled:center"),
+                         scale = attr(titanic_train_xs,"scaled:scale"))
+```
+
+#Determining K value
+```{r}
+sqrt(nrow(titanic_train_xs))
+```
+
+#Building KNN model
+```{r}
+titanic_pred <- knn(train = titanic_train_xs, 
+                   test = titanic_test_xs, 
+                   cl = titanic_train_y, 
+                   k = 33)
+
+head(titanic_pred)
+```
+
+```{r}
+confusionMatrix(data = titanic_pred, 
+                reference = titanic_test_y, 
+                positive = "1")
+```
+
+SUMMARY:
+From two model above, we conclude that classification model where use all columns as it predictors has more better result to predict whether passenger survive or not. We can see it from precision, where classification model has bigger number than KNN models
