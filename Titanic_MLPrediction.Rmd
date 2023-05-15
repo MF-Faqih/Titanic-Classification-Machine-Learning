@@ -1,0 +1,450 @@
+---
+title: "Untitled"
+author: "MF-Faqih"
+date: "2023-03-15"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    number_section: true
+    collapsed: false
+    smooth_scroll: false
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Import Library
+
+```{r message=F, warning=F}
+library(dplyr)
+library(mice)
+library(GGally)
+library(caret)
+library(class)
+```
+
+  Titanic tragedy is one of the most heartbreaking moment in human history. More than half of his passenger dead in this accident and only few can survive and tell the story about how terrifying what happened at the moment.
+  With all due respect for the victim, in this analysis I'm using titanic data set to predict which passenger will survive in this tragedy based on it's characteristics. In this analysis I only use GLM function to build some models, than comparing its performance to know which model is better to predict which passenger survive or not. The data set was obtained from [dataset](https://www.kaggle.com/c/titanic)
+  
+# Load Dateset
+
+```{r cars}
+titanic_train <- read.csv("train.csv")
+
+titanic_train
+```
+
+```{r}
+titanic_test <- read.csv("test.csv")
+
+titanic_test
+```
+
+Column description:
+
+* Pclass: Ticket class (1 for Upper, 2 for Middle and 3 for Lower)
+* Sex: Passenger's Gender
+* Age: Passenger's Age
+* SibSp: siblings / spouse aboard the Titanic (0 for Siblings and 1 for Spouse)
+* Parch: parents / children aboard the Titanic (0 for Parent)
+* Ticket: Ticket Number
+* Fare: Passenger Fare (amount of money should to be paid)
+* Cabin: Cabin Number
+* Embarked: Port of Embarkation
+* Survived: Whether passenger survive or not
+
+# Data Exploration
+
+## Checking Missing Value
+
+```{r}
+colSums(is.na(titanic_train))
+```
+
+```{r}
+colSums(is.na(titanic_test))
+```
+  
+  Fare column in titanic test only have 1 missing value, I can simply replace it with it's mean or median based on its data distribution, if the data have skew it's better to replace it using median and vice versa.
+
+## Checking Data Distribution
+
+```{r}
+hist(titanic_test$Fare)
+```
+
+## Data Correlation
+
+  Multicollinearity is a situation where predictor has high correlation between each other. If the model learn on e thing from one predictor, same condition but from different predictor can cause model wrong in predicting.
+
+```{r warning=F}
+ggcorr(titanic_train, label = TRUE, label_size = 5, hjust = 1, layout.exp = 2)
+```
+
+  From plot above, seems there's no multicollinearity exist in data train.
+
+# Data Preparation
+
+## Data Coertion
+
+```{r}
+glimpse(titanic_train)
+```
+
+```{r}
+glimpse(titanic_test)
+```
+
+  There's some columns in both data train and test that not in their appropriate data type yet, also I'll eliminate some unused column as well.
+
+```{r}
+titanic_train <- titanic_train %>% 
+  select(-c(PassengerId, Ticket, Name, Cabin)) %>% 
+  mutate(Embarked = as.factor(Embarked),
+         Pclass = as.factor(Pclass),
+         Sex = as.factor(Sex),
+         Survived = as.factor(Survived))
+```
+
+```{r}
+titanic_test <- titanic_test %>% 
+  select(-c(PassengerId, Ticket, Name, Cabin)) %>% 
+  mutate(Embarked = as.factor(Embarked),
+         Pclass = as.factor(Pclass),
+         Sex = as.factor(Sex))
+```
+
+## Handling Missing Value
+
+  I can see some column still have missing value. titanic_test have 2 missing value while titanic_train only have 1. For age column, I'll handle it by using mice imputation fo both data set. For fare column in titanic_test since the data have skew, I'll replace the missing value by its median.
+  
+```{r}
+age_imputed <- mice(titanic_train, method = "pmm", seed = 100) #applying mice imputation in train data set
+
+titanic_train_full <- complete(age_imputed)
+```  
+
+```{r}
+med_fare <- median(titanic_test$Fare, na.rm = T) #using median of fare column to impute it's missing value
+
+titanic_test$Fare[is.na(titanic_test$Fare)] <- med_fare
+```
+
+```{r}
+#using mice imputation from data train to replace missing value in test dataset
+
+titanic_test_full <- complete(age_imputed, newdata = titanic_test)
+```
+
+```{r}
+colSums(is.na(titanic_train_full))
+```
+
+```{r}
+colSums(is.na(titanic_test_full))
+```
+
+## Cross Validation
+
+  To know which model have better performance, I need to split data train (titanic_train_clean_up) to 80% for training and the rest for data test.
+  
+```{r warning=F}
+RNGkind(sample.kind = "Rounding")
+set.seed(123)
+
+# index sampling
+index <-  sample(nrow(titanic_train_full), nrow(titanic_train_full)*0.8)
+
+# splitting
+data_train <- titanic_train_full[index, ]
+data_test <- titanic_train_full[-index, ]
+```
+
+## Target Proportion
+
+  One of the most important thing to note is target variable in data train must have balance proportion for each classes. If the target variable unbalance, than the model will only good in predicting the variable with most classes. It will result in bad model.
+
+```{r}
+data_train$Survived %>% table() %>% prop.table()
+```
+
+  Target variable has class proportion 60% 40%, its unbalance. Than my data have low quantity, so, I'll using upsampling method for balancing the target variable.
+
+## Up Sampling
+
+```{r}
+data_train_up <- upSample(x = data_train %>% select(-Survived), y = data_train$Survived , yname = "Survived")
+```
+
+```{r}
+(data_train_up$Survived) %>% table() %>% prop.table()
+```
+
+  Target variable proportion already balance
+
+# Build Model
+
+  As I mentioned earlier, I'll build more than one model than comparing all the result to know which model has better performance
+
+## First Model
+
+  My first model will use all column (except survived) as predictor.
+
+```{r}
+model_all <- glm(Survived ~ ., data = data_train_up, family = binomial)
+```
+
+```{r}
+summary(model_all)
+```
+
+## Second Model
+
+  My second column will only use categoric column as predictor.
+
+```{r}
+model_cat <- glm(Survived ~ Pclass + Sex + Embarked, data = data_train_up, family = binomial)
+```
+
+```{r}
+summary(model_cat)
+```
+
+## Third Model
+
+  Third model will only use numeric column as predictor.
+
+```{r}
+model_num <- glm(Survived ~ Age + SibSp + Parch + Fare, data = data_train_up, family = binomial)
+```
+
+```{r}
+summary(model_num)
+```
+
+## Fourth Model
+
+  Fourth model will use step wise elimination with backward direction. This method will automatically choose only column which have big contribution to the model.
+
+```{r}
+model_step <- step(model_all, direction = "backward", trace = F)
+```
+
+```{r}
+summary(model_step)
+```
+
+  Fourth model seems the best model, because it have least number of AIC. But it's not enough to conclude that fourth model is the best model if we only see from AIC number, so I'll try to predict all the model with data test than see it's accuracy
+
+
+# Model Evaluation
+
+## First Model
+
+```{r}
+data_test$pred_survive <- predict(object = model_all,
+                                newdata = data_test,
+                                type = "response")
+```
+
+```{r}
+data_test$pred_label <- ifelse(data_test$pred_survive>0.5, 1, 0)
+```
+
+```{r}
+table(actual = data_test$Survived,
+      predict = data_test$pred_label)
+```
+
+```{r}
+confusionMatrix(data = as.factor(data_test$pred_label),
+                reference = data_test$Survived,
+                positive = "1")
+```
+
+  I choose 1 (survived) as positive because it's really important for rescue team to know how much people survived during the incident, so they can prepare everything before take action. And anything else similar to this cases.
+  This model have good accuracy, it's around 81%. Another important parameter is sensitivity (recall), it's describe about how many predicted positive value are true compared with actual positive value, and form this model I can get 81%. As I mentioned earlier, It will be better if the model predicted 1 more than 0, so every survivor can be evacuated although in actual there were less survivor then predicted.
+
+## Second Model
+
+```{r}
+data_test$pred_survive <- predict(object = model_cat,
+                                newdata = data_test,
+                                type = "response")
+```
+
+```{r}
+data_test$pred_label <- ifelse(data_test$pred_survive>0.5, 1, 0)
+```
+
+```{r}
+table(actual = data_test$Survived,
+      predict = data_test$pred_label)
+```
+
+```{r}
+confusionMatrix(data = as.factor(data_test$pred_label),
+                reference = data_test$Survived,
+                positive = "1")
+```
+
+## Third Model
+
+```{r}
+data_test$pred_survive <- predict(object = model_num,
+                                newdata = data_test,
+                                type = "response")
+```
+
+```{r}
+data_test$pred_label <- ifelse(data_test$pred_survive>0.5, 1, 0)
+```
+
+```{r}
+table(actual = data_test$Survived,
+      predict = data_test$pred_label)
+```
+
+```{r}
+confusionMatrix(data = as.factor(data_test$pred_label),
+                reference = data_test$Survived,
+                positive = "1")
+```
+
+## Fourth Model
+
+```{r}
+data_test$pred_survive <- predict(object = model_step,
+                                newdata = data_test,
+                                type = "response")
+```
+
+```{r}
+data_test$pred_label <- ifelse(data_test$pred_survive>0.5, 1, 0)
+```
+
+```{r}
+table(actual = data_test$Survived,
+      predict = data_test$pred_label)
+```
+
+```{r}
+confusionMatrix(data = as.factor(data_test$pred_label),
+                reference = data_test$Survived,
+                positive = "1")
+```
+
+  The fourth and first model has exactly the same accuracy and sensitivity (recall) number, because, if looking back above, the column that give biggest contribution to the model are same as column that fourth model used. 
+  
+## Model Tuning
+
+  I'll tuning the model by changing threshold of the predictor (I'm using victim will survive if predicted value is greater than 0.5),I'll trying to decreasing the threshold and see if I can get better accuracy and sensitivity
+  
+```{r}
+data_test$pred_label <- ifelse(data_test$pred_survive>0.4, 1, 0)
+```
+
+```{r}
+confusionMatrix(data = as.factor(data_test$pred_label),
+                reference = data_test$Survived,
+                positive = "1")
+```
+
+```{r}
+data_test$pred_label <- ifelse(data_test$pred_survive>0.3, 1, 0)
+```
+
+```{r}
+confusionMatrix(data = as.factor(data_test$pred_label),
+                reference = data_test$Survived,
+                positive = "1")
+```
+
+  Sensitivity will keep increasing as long as I decreasing the threshold and the accuracy will keep decreasing as well. I prefer to choose 0.03 as my threshold because every passenger lives is important. I'm trying to use 0.03 as my threshold, but the result was not that good, no significant increasing in sensitivity value, also I get very low value in accuracy.
+
+# Predicting
+
+```{r}
+titanic_test$pred_survive <- predict(object = model_all,
+                                     newdata = titanic_test,
+                                     type = "response")
+```
+
+```{r}
+titanic_test$pred_label <- ifelse(titanic_test$pred_survive > 0.3, 1, 0)
+```
+
+```{r}
+table(titanic_test$pred_label)
+```
+
+ Using model_all, I can say there's 207 passenger survive in this tragedy.
+
+# K-Nearest Neighbor
+
+  Another way to do classification prediction using machine learning is by using K Nearest Neighbor. Unlike the previous model (glm) KNN does not need to learn process, but directly make predictions. But first, since my data test didn't have target variable, I'll use my data train and data test to see it's accuracy and sensitivity.
+  
+## Scaling
+
+  Scaling data is a must before do KNN prediction. If the data scale is not in same proportion, it can lead to poor result.
+
+  First I need to separate target from predictor.
+
+```{r}
+data_train_up_x <- data_train_up %>% select_if(is.numeric)
+data_test_x <- data_test %>% select_if(is.numeric) %>% select(-c(pred_survive, pred_label))
+
+data_train_up_y <- data_train_up[,8]
+data_test_y <- data_test[,1]
+```
+
+```{r}
+summary(data_train_up_x)
+```
+
+  from the results above it can be said that the data scale is not the same
+  
+```{r}
+train_x_scale <- scale(data_train_up_x) #scaling data
+```
+
+```{r}
+#Using data train scale and center 
+test_x_scale <- scale(x=data_test_x,
+                      center = attr(train_x_scale, "scaled:center"),
+                      scale = attr(train_x_scale, "scaled:scale"))
+
+head(test_x_scale)
+```
+
+```{r}
+sqrt(nrow(data_train_up)) #determining optimum K value
+```
+
+  Since my target variable have 2 class, I'll use odd K number (29)
+
+```{r}
+titanic_pred <- knn(train = train_x_scale,
+                 test = test_x_scale,
+                 cl = data_train_up_y,
+                 k= 29)
+
+
+class(titanic_pred)
+```
+
+## Data Evaluatioon
+
+```{r}
+confusionMatrix(data = titanic_pred,
+                reference = data_test_y,
+                positive= "1")
+```
+
+SUMMARY:
+  
+  In this analysis I'm using 2 machine learning to build model to predict whether passenger survive or not. For first model I'm using glm to make prediction. From all fourth model, first and fourth model have best performance in predicting target variable. Using 0.3 as model threshold I can get 76% in accuracy and 92% in sensitivity.
+  Second machine learning used is K-NN, but this model have worse performance, so I'm not using it.
